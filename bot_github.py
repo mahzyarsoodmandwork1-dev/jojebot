@@ -10,9 +10,9 @@ import time
 
 import requests
 
-BOT_TOKEN = os.environ["9116559772:AAEI--HjhcnJF18QI3kGKRYTiZfEHtk3TkM"]
-CHANNEL = os.environ["@Jojeshopir"]
-SITE_URL = os.environ["https://jojeshop.ir/"].rstrip("/")
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+CHANNEL = os.environ["CHANNEL"]
+SITE_URL = os.environ["SITE_URL"].rstrip("/")
 DELAY_BETWEEN_POSTS = 4
 STATE_FILE = "sent_ids.json"
 
