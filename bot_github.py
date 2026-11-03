@@ -1,11 +1,13 @@
 
 import html
 import json
+import mimetypes
 import os
 import re
 import time
-import mimetypes
+
 import requests
+
 
 BOT_TOKEN = os.environ["BOT_TOKEN"]
 CHANNEL = os.environ["CHANNEL"]
@@ -18,7 +20,7 @@ MAX_IMAGE_SIZE = 10 * 1024 * 1024
 API = f"https://api.telegram.org/bot{BOT_TOKEN}"
 
 FOOTER = (
-    "-------------------------------------------------------------------------------\n"
+    "------------------------------------------------------\n"
     "@Mahzyarrrs\n"
     "09945286021"
 )
@@ -33,13 +35,15 @@ def load_sent():
     if not os.path.exists(STATE_FILE):
         return set()
 
-    with open(STATE_FILE, encoding="utf-8") as f:
-        return {str(item) for item in json.load(f)}
+    with open(STATE_FILE, "r", encoding="utf-8") as file:
+        data = json.load(file)
+
+    return {str(item) for item in data}
 
 
 def save_sent(ids):
-    with open(STATE_FILE, "w", encoding="utf-8") as f:
-        json.dump(sorted(str(item) for item in ids), f)
+    with open(STATE_FILE, "w", encoding="utf-8") as file:
+        json.dump(sorted(str(item) for item in ids), file, ensure_ascii=False)
 
 
 def fetch_products():
@@ -58,7 +62,6 @@ def fetch_products():
                 },
                 timeout=30,
             )
-
             response.raise_for_status()
             data = response.json()
 
@@ -66,7 +69,6 @@ def fetch_products():
                 break
 
             products.extend(data)
-
             print(f"صفحه {page}: {len(data)} محصول دریافت شد")
 
             if len(data) < 100:
@@ -78,26 +80,18 @@ def fetch_products():
             print("خطا در دریافت محصولات:", str(error))
             break
 
-    # مرتب‌سازی محلی از قدیمی به جدید
-    products.sort(
-        key=lambda p: p.get("date_created", "") or ""
-    )
+    products.sort(key=lambda item: item.get("date_created", "") or "")
 
-    print("مجموع محصولات:", len(products))
-
+    print("مجموع محصولات دریافت‌شده:", len(products))
     return products
 
 
-def clean(text):
-    text = str(text or "")
-    text = re.sub(
-        r"(?is)<(script|style).*?>.*?</\\1>",
-        "",
-        text
-    )
-    text = re.sub(r"<[^>]+>", " ", text)
-    text = html.unescape(text)
-    return re.sub(r"\\s+", " ", text).strip()
+def clean(value):
+    value = str(value or "")
+    value = re.sub(r"(?is)<(script|style).*?>.*?</\1>", "", value)
+    value = re.sub(r"<[^>]+>", " ", value)
+    value = html.unescape(value)
+    return re.sub(r"\s+", " ", value).strip()
 
 
 def extract_sizes(product):
@@ -114,10 +108,9 @@ def extract_sizes(product):
         "سایزبندی",
     }
 
-    found = []
+    sizes = []
 
     for attribute in product.get("attributes") or []:
-
         name = clean(attribute.get("name", "")).lower()
         taxonomy = clean(attribute.get("taxonomy", "")).lower()
 
@@ -136,7 +129,6 @@ def extract_sizes(product):
         values = []
 
         for term in attribute.get("terms") or []:
-
             if isinstance(term, dict):
                 value = term.get("name") or term.get("slug")
             else:
@@ -150,10 +142,10 @@ def extract_sizes(product):
                 values.append(clean(option))
 
         for value in values:
-            if value and value not in found:
-                found.append(value)
+            if value and value not in sizes:
+                sizes.append(value)
 
-    return found
+    return sizes
 
 
 def build_caption(product):
@@ -162,25 +154,18 @@ def build_caption(product):
     prices = product.get("prices") or {}
 
     try:
-        minor = int(prices.get("currency_minor_unit") or 0)
-
-        price = (
-            int(prices.get("price") or 0)
-            / (10 ** minor)
-        )
-
+        minor_unit = int(prices.get("currency_minor_unit") or 0)
+        price = int(prices.get("price") or 0) / (10 ** minor_unit)
     except (ValueError, TypeError, ZeroDivisionError):
         price = 0
 
-    symbol = clean(prices.get("currency_symbol", ""))
+    currency_symbol = clean(prices.get("currency_symbol", ""))
 
-    parts = [
-        f"<b>{html.escape(name)}</b>"
-    ]
+    parts = [f"<b>{html.escape(name)}</b>"]
 
     if price:
         parts.append(
-            f"💰 {price:,.0f} {html.escape(symbol)}"
+            f"💰 {price:,.0f} {html.escape(currency_symbol)}"
         )
 
     sizes = extract_sizes(product)
@@ -190,74 +175,68 @@ def build_caption(product):
             "📏 سایز: " + html.escape("، ".join(sizes))
         )
 
-    # توضیحات اصلی محصول
     description = clean(product.get("description", ""))
 
-    if description:
-        parts.append(
-            html.escape(description[:400])
-        )
-
-    # لینک قابل کلیک
     if permalink:
-        safe_url = html.escape(permalink, quote=True)
-
+        safe_permalink = html.escape(permalink, quote=True)
         parts.append(
-            f'🔗 <a href="{safe_url}">مشاهده در سایت</a>'
+            f'🔗 <a href="{safe_permalink}">مشاهده در سایت</a>'
         )
 
-    # امضای ثابت انتهای تمام پیام‌ها
     parts.append(html.escape(FOOTER))
+
+    fixed_caption = "\n\n".join(parts)
+
+    if description:
+        available = max(0, 950 - len(fixed_caption) - 2)
+
+        if available > 0:
+            short_description = description[:available].rstrip()
+
+            if len(description) > available and available >= 4:
+                short_description = short_description[:-3].rstrip() + "..."
+
+            if short_description:
+                parts.insert(
+                    -2 if permalink else -1,
+                    html.escape(short_description)
+                )
 
     caption = "\n\n".join(parts)
 
-    # محدودیت کپشن تلگرام
-    if len(caption) > 1024:
-        # ابتدا توضیحات را کوتاه می‌کنیم
-        description = clean(product.get("description", ""))
+    while len(caption) > 1024 and description:
+        description = description[:max(0, len(description) - 30)]
+
+        parts = [f"<b>{html.escape(name)}</b>"]
+
+        if price:
+            parts.append(
+                f"💰 {price:,.0f} {html.escape(currency_symbol)}"
+            )
+
+        if sizes:
+            parts.append(
+                "📏 سایز: " + html.escape("، ".join(sizes))
+            )
 
         if description:
-            remaining = max(0, 1024 - len(caption) + len(
-                html.escape(description[:400])
-            ) - 3)
+            parts.append(html.escape(description.rstrip()) + "...")
 
-            shortened = html.escape(description[:remaining]) + "..."
+        if permalink:
+            parts.append(
+                f'🔗 <a href="{safe_permalink}">مشاهده در سایت</a>'
+            )
 
-            parts = [
-                f"<b>{html.escape(name)}</b>"
-            ]
-
-            if price:
-                parts.append(
-                    f"💰 {price:,.0f} {html.escape(symbol)}"
-                )
-
-            if sizes:
-                parts.append(
-                    "📏 سایز: " + html.escape("، ".join(sizes))
-                )
-
-            if shortened != "...":
-                parts.append(shortened)
-
-            if permalink:
-                parts.append(
-                    f'🔗 <a href="{safe_url}">مشاهده در سایت</a>'
-                )
-
-            parts.append(html.escape(FOOTER))
-
-            caption = "\n\n".join(parts)
+        parts.append(html.escape(FOOTER))
+        caption = "\n\n".join(parts)
 
     return caption
 
 
 def telegram_post(method, data, files=None):
-
     url = f"{API}/{method}"
 
     for attempt in range(3):
-
         try:
             response = SESSION.post(
                 url,
@@ -266,28 +245,31 @@ def telegram_post(method, data, files=None):
                 timeout=60,
             )
 
-            result = response.json()
+            try:
+                result = response.json()
+            except ValueError:
+                print("پاسخ نامعتبر تلگرام:", response.text[:500])
+                return False
 
             if result.get("ok"):
                 return True
 
             if result.get("error_code") == 429:
-
-                wait = result.get(
+                wait_seconds = result.get(
                     "parameters", {}
                 ).get("retry_after", 30)
 
-                print(f"محدودیت تلگرام: {wait} ثانیه")
+                print(
+                    f"محدودیت تلگرام؛ {wait_seconds} ثانیه صبر می‌کنیم"
+                )
 
-                time.sleep(wait)
+                time.sleep(wait_seconds)
                 continue
 
             print("خطای تلگرام:", result)
-
             return False
 
-        except Exception as error:
-
+        except requests.RequestException as error:
             print("خطای ارتباط با تلگرام:", str(error))
 
             if attempt < 2:
@@ -297,7 +279,6 @@ def telegram_post(method, data, files=None):
 
 
 def download_image(image_url):
-
     try:
         response = SESSION.get(
             image_url,
@@ -324,18 +305,17 @@ def download_image(image_url):
         )
 
         if content_length > MAX_IMAGE_SIZE:
-            print("حجم تصویر بیش از حد مجاز است")
+            print("حجم تصویر بیشتر از 10 مگابایت است")
             return None
 
         image_data = bytearray()
 
         for chunk in response.iter_content(chunk_size=8192):
-
             if chunk:
                 image_data.extend(chunk)
 
                 if len(image_data) > MAX_IMAGE_SIZE:
-                    print("حجم تصویر بیش از 10 مگابایت است")
+                    print("حجم تصویر بیشتر از حد مجاز است")
                     return None
 
         if not image_data:
@@ -349,30 +329,23 @@ def download_image(image_url):
         return bytes(image_data), extension, content_type
 
     except Exception as error:
-
         print("خطا در دانلود تصویر:", str(error))
-
         return None
 
 
 def send_product(product):
-
     caption = build_caption(product)
     images = product.get("images") or []
 
-    # تلاش برای ارسال تصویر
     if images:
-
         image_url = images[0].get("src", "")
 
         if image_url:
-
-            print("دانلود تصویر:", product.get("name"))
+            print("در حال دانلود تصویر:", product.get("name"))
 
             downloaded = download_image(image_url)
 
             if downloaded:
-
                 image_data, extension, mime_type = downloaded
 
                 success = telegram_post(
@@ -394,9 +367,10 @@ def send_product(product):
                 if success:
                     return True
 
-                print("ارسال تصویر ناموفق بود")
+                print(
+                    "ارسال عکس ناموفق بود؛ ارسال متنی را امتحان می‌کنیم"
+                )
 
-    # ارسال متن در صورت نبود تصویر یا خرابی آن
     print("ارسال محصول بدون تصویر:", product.get("name"))
 
     return telegram_post(
@@ -411,7 +385,6 @@ def send_product(product):
 
 
 if __name__ == "__main__":
-
     sent = load_sent()
 
     print("تعداد محصولات قبلاً ارسال‌شده:", len(sent))
@@ -421,9 +394,7 @@ if __name__ == "__main__":
     print("شروع ارسال محصولات...")
 
     try:
-
         for product in products:
-
             product_id = str(product["id"])
 
             if product_id in sent:
@@ -432,40 +403,31 @@ if __name__ == "__main__":
             print("در حال پردازش:", product.get("name"))
 
             try:
-
                 success = send_product(product)
 
                 if success:
-
                     sent.add(product_id)
                     save_sent(sent)
 
-                    print(
-                        "ارسال شد:",
-                        clean(product.get("name"))
-                    )
+                    print("ارسال شد:", clean(product.get("name")))
 
                     time.sleep(DELAY_BETWEEN_POSTS)
 
                 else:
-
                     print(
-                        "ارسال ناموفق:",
-                        clean(product.get("name"))
+                        "ارسال ناموفق؛ در اجرای بعدی دوباره تلاش می‌شود:",
+                        clean(product.get("name")),
                     )
 
             except Exception as error:
-
                 print(
-                    "خطای محصول:",
+                    "خطای پردازش محصول:",
                     product.get("name"),
-                    str(error)
+                    str(error),
                 )
-
                 continue
 
     finally:
-
         save_sent(sent)
 
     print("پایان عملیات")
